@@ -36,9 +36,9 @@
 #include "calibration.h"
 #include "GlobalVars.h"
 
-//#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
-//#include "dmpmag.h"
-//#endif
+#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
+    #include "dmpmag.h"
+#endif
 
 #define MAG_CORR_RATIO 0.02
 
