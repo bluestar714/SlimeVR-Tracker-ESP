@@ -22,7 +22,7 @@
 */
 
 #include "globals.h"
-#include "helper_3dmath.h"
+//#include "helper_3dmath.h"
 
 #ifdef IMU_MPU6050_RUNTIME_CALIBRATION
 #include "MPU6050_6Axis_MotionApps_V6_12.h"
@@ -36,9 +36,9 @@
 #include "calibration.h"
 #include "GlobalVars.h"
 
-#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
-#include "dmpmag.h"
-#endif
+//#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
+//#include "dmpmag.h"
+//#endif
 
 #define MAG_CORR_RATIO 0.02
 
@@ -153,10 +153,10 @@ void MPU6050Sensor::motionLoop()
 
     if (correction.length_squared() == 0.0f) {
         //correction = getCorrection(Grav, Mxyz, quat);
-        correction = getCorrection(Grav, Mxyz, quat);
+        correction = getTmpCorrection(Grav, Mxyz, quat);
     } else {
         //Quat newCorr = getCorrection(Grav, Mxyz, quat);
-        Quat newCorr = getCorrection(Grav, Mxyz, quat);
+        Quat newCorr = getTmpCorrection(Grav, Mxyz, quat);
 
         if(!__isnanf(newCorr.w)) {
             //correction = correction.slerp(newCorr, MAG_CORR_RATIO);
@@ -170,7 +170,7 @@ void MPU6050Sensor::motionLoop()
     unsigned long now = micros();
     unsigned long deltat = now - last; //seconds since last update
     last = now;
-    getMPUScaled();
+    getMPUScaled2();
     
     #if defined(_MAHONY_H_)
     //mahonyQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], Mxyz[0], Mxyz[1], Mxyz[2], deltat * 1.0e-6);
@@ -198,8 +198,32 @@ void MPU6050Sensor::motionLoop()
 }
 
 
+Quat MPU6050Sensor::getTmpQuatDCM(float* acc, float* mag){
+    Vector3 Mv(mag[0], mag[1], mag[2]);
+    Vector3 Dv(acc[0], acc[1], acc[2]);
+    Dv.normalize();
+    Vector3 Rv = Dv.cross(Mv);
+    Rv.normalize();
+    Vector3 Fv = Rv.cross(Dv);
+    Fv.normalize();
+    float q04 = 2*sqrt(1+Fv.x+Rv.y+Dv.z);
+    return Quat(Rv.z-Dv.y,Dv.x-Fv.z,Fv.y-Rv.x,q04*q04/4).normalized();    
+}
 
-void MPU6050Sensor::getMPUScaled()
+Quat MPU6050Sensor::getTmpCorrection(float* acc,float* mag,Quat quat)
+{
+    Quat magQ = getTmpQuatDCM(acc,mag);
+    //dmp.w=DCM.z
+    //dmp.x=DCM.y
+    //dmp.y=-DCM.x
+    //dmp.z=DCM.w
+    Quat trans(magQ.x, magQ.y, magQ.w, magQ.z);
+    Quat result = trans*quat.inverse();
+    return result;
+
+}
+
+void MPU6050Sensor::getMPUScaled2()
 {
    // float temp[3];
     int i;

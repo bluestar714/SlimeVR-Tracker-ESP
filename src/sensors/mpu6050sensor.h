@@ -35,7 +35,7 @@ public:
     void motionSetup() override final;
     void motionLoop() override final;
     void startCalibration(int calibrationType) override final;
-    void getMPUScaled();
+    void getMPUScaled2();
 
 private:
     MPU6050 imu{};
@@ -50,6 +50,9 @@ private:
 
     float Mxyz[3]{};
     Quat correction{1, 0, 0, 0};
+    Quat getTmpCorrection(float* acc,float* mag,Quat quat);
+    Quat getTmpQuatDCM(float* acc, float* mag);
+
 #ifndef IMU_MPU6050_RUNTIME_CALIBRATION
     SlimeVR::Configuration::MPU6050CalibrationConfig m_Calibration;
 #endif
