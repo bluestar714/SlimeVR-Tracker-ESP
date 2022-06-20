@@ -36,11 +36,18 @@
 #include "calibration.h"
 #include "GlobalVars.h"
 
-#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
-    #include "dmpmag.h"
-#endif
+//#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
+//    #include "dmpmag.h"
+//#endif
+#include "mahony.h"
+//#include "madgwick.h"
 
 #define MAG_CORR_RATIO 0.02
+
+#if defined(_MAHONY_H_) || defined(_MADGWICK_H_)
+constexpr float gscale = (250. / 32768.0) * (PI / 180.0); //gyro default 250 LSB per d/s -> rad/s
+#endif
+
 
 void MPU6050Sensor::motionSetup()
 {
@@ -225,7 +232,7 @@ Quat MPU6050Sensor::getTmpCorrection(float* acc,float* mag,Quat quat)
 
 void MPU6050Sensor::getMPUScaled2()
 {
-   // float temp[3];
+    float temp[3];
     int i;
 
 #if defined(_MAHONY_H_) || defined(_MADGWICK_H_)

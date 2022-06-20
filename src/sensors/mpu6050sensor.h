@@ -48,14 +48,17 @@ private:
     uint16_t fifoCount;       // count of all bytes currently in FIFO
     uint8_t fifoBuffer[64]{}; // FIFO storage buffer
 
+    float q[4]{1.0f, 0.0f, 0.0f, 0.0f}; // for raw filter
+    float Axyz[3]{};
+    float Gxyz[3]{};
     float Mxyz[3]{};
     Quat correction{1, 0, 0, 0};
     Quat getTmpCorrection(float* acc,float* mag,Quat quat);
     Quat getTmpQuatDCM(float* acc, float* mag);
-
-#ifndef IMU_MPU6050_RUNTIME_CALIBRATION
+    unsigned long now = 0, last = 0; // micros() timers
+//#ifndef IMU_MPU6050_RUNTIME_CALIBRATION
     SlimeVR::Configuration::MPU6050CalibrationConfig m_Calibration;
-#endif
+//#endif
 };
 
 #endif
