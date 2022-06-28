@@ -157,7 +157,7 @@ void MPU6050Sensor::motionLoop()
     imu.dmpGetGravity(&grav, &rawQuat);
 
     float Grav[] = {grav.x, grav.y, grav.z};
-
+    
     if (correction.length_squared() == 0.0f) {
         //correction = getCorrection(Grav, Mxyz, quat);
         correction = getTmpCorrection(Grav, Mxyz, quat);
@@ -173,7 +173,7 @@ void MPU6050Sensor::motionLoop()
 
     quaternion = correction * quat;
 
-#else
+#else //MAHONY or MADWICK
     unsigned long now = micros();
     unsigned long deltat = now - last; //seconds since last update
     last = now;
@@ -181,19 +181,22 @@ void MPU6050Sensor::motionLoop()
     
     #if defined(_MAHONY_H_)
     //mahonyQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], Mxyz[0], Mxyz[1], Mxyz[2], deltat * 1.0e-6);
-    mahonyQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], 0.0, 0.0, 0.0, deltat * 1.0e-6);
+    mahonyQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], deltat * 1.0e-6);
     #elif defined(_MADGWICK_H_)
     //madgwickQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], Mxyz[0], Mxyz[1], Mxyz[2], deltat * 1.0e-6);
-    madgwickQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], 0.0, 0.0, 0.0, deltat * 1.0e-6);
+    madgwickQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], deltat * 1.0e-6);
     #endif
     quaternion.set(-q[2], q[1], q[3], q[0]);
 #endif
     quaternion *= sensorOffset;
 
-
+    m_Logger.info("q0: %f", q[0]);
+    m_Logger.info("q1: %f", q[1]);
+    m_Logger.info("q2: %f", q[2]);
+    m_Logger.info("q3: %f", q[3]);
 #if ENABLE_INSPECTION
         {
-            Network::sendInspectionFusedIMUData(sensorId, quaternion);
+        Network::sendInspectionFusedIMUData(sensorId, quaternion);
         }
 #endif
 
@@ -214,6 +217,7 @@ Quat MPU6050Sensor::getTmpQuatDCM(float* acc, float* mag){
     Vector3 Fv = Rv.cross(Dv);
     Fv.normalize();
     float q04 = 2*sqrt(1+Fv.x+Rv.y+Dv.z);
+    m_Logger.info("getTmpresult: %f ", q04);
     return Quat(Rv.z-Dv.y,Dv.x-Fv.z,Fv.y-Rv.x,q04*q04/4).normalized();    
 }
 
@@ -226,6 +230,7 @@ Quat MPU6050Sensor::getTmpCorrection(float* acc,float* mag,Quat quat)
     //dmp.z=DCM.w
     Quat trans(magQ.x, magQ.y, magQ.w, magQ.z);
     Quat result = trans*quat.inverse();
+    m_Logger.info("getTmpresult: %d ", result);
     return result;
 
 }
@@ -235,9 +240,12 @@ void MPU6050Sensor::getMPUScaled2()
     float temp[3];
     int i;
 
+    //m_Logger.info("I am loop man ");
 #if defined(_MAHONY_H_) || defined(_MADGWICK_H_)
-    int16_t ax, ay, az, gx, gy, gz, mx, my, mz;
-    imu.getMotion9(&ax, &ay, &az, &gx, &gy, &gz, &mx, &my, &mz);
+    int16_t ax, ay, az, gx, gy, gz;
+    //imu.getMotion9(&ax, &ay, &az, &gx, &gy, &gz, &mx, &my, &mz);
+    imu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    //m_Logger.info("ax: (%f), ay: (%f), az: (%f), gx: (%f), gy: (%f), gz: (%f) ", ax, ay, az, gx, gy, gz);
     Gxyz[0] = ((float)gx - m_Calibration.G_off[0]) * gscale; //250 LSB(d/s) default to radians/s
     Gxyz[1] = ((float)gy - m_Calibration.G_off[1]) * gscale;
     Gxyz[2] = ((float)gz - m_Calibration.G_off[2]) * gscale;

@@ -46,6 +46,7 @@ namespace SlimeVR {
 
             // raw offsets, determined from gyro at rest
             float G_off[3];
+            
             float A_Ainv[3][3];
 
         };
