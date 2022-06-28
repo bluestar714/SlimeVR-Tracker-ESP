@@ -22,6 +22,7 @@
 */
 
 #include "globals.h"
+//#include "helper_3dmath.h"
 
 #ifdef IMU_MPU6050_RUNTIME_CALIBRATION
 #include "MPU6050_6Axis_MotionApps_V6_12.h"
@@ -34,6 +35,19 @@
 #include <i2cscan.h>
 #include "calibration.h"
 #include "GlobalVars.h"
+
+//#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
+//    #include "dmpmag.h"
+//#endif
+#include "mahony.h"
+//#include "madgwick.h"
+
+#define MAG_CORR_RATIO 0.02
+
+#if defined(_MAHONY_H_) || defined(_MADGWICK_H_)
+constexpr float gscale = (250. / 32768.0) * (PI / 180.0); //gyro default 250 LSB per d/s -> rad/s
+#endif
+
 
 void MPU6050Sensor::motionSetup()
 {
@@ -126,6 +140,7 @@ void MPU6050Sensor::motionLoop()
     }
 #endif
 
+#if not (defined(_MAHONY_H_) || defined(_MADGWICK_H_))
     if (!dmpReady)
         return;
 
@@ -133,11 +148,55 @@ void MPU6050Sensor::motionLoop()
     {
         imu.dmpGetQuaternion(&rawQuat, fifoBuffer);
         quaternion.set(-rawQuat.y, rawQuat.x, rawQuat.z, rawQuat.w);
-        quaternion *= sensorOffset;
+        quaternion *= sensorOffset;   
+    }
 
+    Quat quat(-rawQuat.y,rawQuat.x,rawQuat.z,rawQuat.w);
+    
+    VectorFloat grav;
+    imu.dmpGetGravity(&grav, &rawQuat);
+
+    float Grav[] = {grav.x, grav.y, grav.z};
+    
+    if (correction.length_squared() == 0.0f) {
+        //correction = getCorrection(Grav, Mxyz, quat);
+        correction = getTmpCorrection(Grav, Mxyz, quat);
+    } else {
+        //Quat newCorr = getCorrection(Grav, Mxyz, quat);
+        Quat newCorr = getTmpCorrection(Grav, Mxyz, quat);
+
+        if(!__isnanf(newCorr.w)) {
+            //correction = correction.slerp(newCorr, MAG_CORR_RATIO);
+            correction = correction.slerp(newCorr, MAG_CORR_RATIO);
+        }
+    }
+
+    quaternion = correction * quat;
+
+#else //MAHONY or MADWICK
+    unsigned long now = micros();
+    unsigned long deltat = now - last; //seconds since last update
+    last = now;
+    getMPUScaled2();
+    
+    #if defined(_MAHONY_H_)
+    //mahonyQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], Mxyz[0], Mxyz[1], Mxyz[2], deltat * 1.0e-6);
+    mahonyQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], deltat * 1.0e-6);
+    #elif defined(_MADGWICK_H_)
+    //madgwickQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], Mxyz[0], Mxyz[1], Mxyz[2], deltat * 1.0e-6);
+    madgwickQuaternionUpdate(q, Axyz[0], Axyz[1], Axyz[2], Gxyz[0], Gxyz[1], Gxyz[2], deltat * 1.0e-6);
+    #endif
+    quaternion.set(-q[2], q[1], q[3], q[0]);
+#endif
+    quaternion *= sensorOffset;
+
+    m_Logger.info("q0: %f", q[0]);
+    m_Logger.info("q1: %f", q[1]);
+    m_Logger.info("q2: %f", q[2]);
+    m_Logger.info("q3: %f", q[3]);
 #if ENABLE_INSPECTION
         {
-            Network::sendInspectionFusedIMUData(sensorId, quaternion);
+        Network::sendInspectionFusedIMUData(sensorId, quaternion);
         }
 #endif
 
@@ -146,8 +205,100 @@ void MPU6050Sensor::motionLoop()
             newData = true;
             lastQuatSent = quaternion;
         }
-    }
 }
+
+
+Quat MPU6050Sensor::getTmpQuatDCM(float* acc, float* mag){
+    Vector3 Mv(mag[0], mag[1], mag[2]);
+    Vector3 Dv(acc[0], acc[1], acc[2]);
+    Dv.normalize();
+    Vector3 Rv = Dv.cross(Mv);
+    Rv.normalize();
+    Vector3 Fv = Rv.cross(Dv);
+    Fv.normalize();
+    float q04 = 2*sqrt(1+Fv.x+Rv.y+Dv.z);
+    m_Logger.info("getTmpresult: %f ", q04);
+    return Quat(Rv.z-Dv.y,Dv.x-Fv.z,Fv.y-Rv.x,q04*q04/4).normalized();    
+}
+
+Quat MPU6050Sensor::getTmpCorrection(float* acc,float* mag,Quat quat)
+{
+    Quat magQ = getTmpQuatDCM(acc,mag);
+    //dmp.w=DCM.z
+    //dmp.x=DCM.y
+    //dmp.y=-DCM.x
+    //dmp.z=DCM.w
+    Quat trans(magQ.x, magQ.y, magQ.w, magQ.z);
+    Quat result = trans*quat.inverse();
+    m_Logger.info("getTmpresult: %d ", result);
+    return result;
+
+}
+
+void MPU6050Sensor::getMPUScaled2()
+{
+    float temp[3];
+    int i;
+
+    //m_Logger.info("I am loop man ");
+#if defined(_MAHONY_H_) || defined(_MADGWICK_H_)
+    int16_t ax, ay, az, gx, gy, gz;
+    //imu.getMotion9(&ax, &ay, &az, &gx, &gy, &gz, &mx, &my, &mz);
+    imu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    //m_Logger.info("ax: (%f), ay: (%f), az: (%f), gx: (%f), gy: (%f), gz: (%f) ", ax, ay, az, gx, gy, gz);
+    Gxyz[0] = ((float)gx - m_Calibration.G_off[0]) * gscale; //250 LSB(d/s) default to radians/s
+    Gxyz[1] = ((float)gy - m_Calibration.G_off[1]) * gscale;
+    Gxyz[2] = ((float)gz - m_Calibration.G_off[2]) * gscale;
+
+    Axyz[0] = (float)ax;
+    Axyz[1] = (float)ay;
+    Axyz[2] = (float)az;
+
+    //apply offsets (bias) and scale factors from Magneto
+    #if useFullCalibrationMatrix == true
+        for (i = 0; i < 3; i++)
+            temp[i] = (Axyz[i] - m_Calibration.A_B[i]);
+        Axyz[0] = m_Calibration.A_Ainv[0][0] * temp[0] + m_Calibration.A_Ainv[0][1] * temp[1] + m_Calibration.A_Ainv[0][2] * temp[2];
+        Axyz[1] = m_Calibration.A_Ainv[1][0] * temp[0] + m_Calibration.A_Ainv[1][1] * temp[1] + m_Calibration.A_Ainv[1][2] * temp[2];
+        Axyz[2] = m_Calibration.A_Ainv[2][0] * temp[0] + m_Calibration.A_Ainv[2][1] * temp[1] + m_Calibration.A_Ainv[2][2] * temp[2];
+    #else
+        for (i = 0; i < 3; i++)
+            Axyz[i] = (Axyz[i] - m-Calibration.A_B[i]);
+    #endif
+
+#else
+    //int16_t mx, my, mz;
+    // with DMP, we just need mag data
+    //imu.getMagnetometer(&mx, &my, &mz);
+#endif
+    Mxyz[0] = 0.0;
+    Mxyz[1] = 0.0;
+    Mxyz[2] = 0.0;
+    // Orientations of axes are set in accordance with the datasheet
+    // See Section 9.1 Orientation of Axes
+    // https://invensense.tdk.com/wp-content/uploads/2015/02/PS-MPU-9250A-01-v1.1.pdf
+    //Mxyz[0] = 0.0;
+    //Mxyz[1] = 0.0;
+    //Mxyz[2] = -0.0;
+    //apply offsets and scale factors from Magneto
+    #if useFullCalibrationMatrix == true
+        for (i = 0; i < 3; i++)
+        //temp[i] = (Mxyz[i] - m_Calibration.M_B[i]);
+        //Mxyz[1] = m_Calibration.M_Ainv[1][0] * temp[0] + m_Calibration.M_Ainv[1][1] * temp[1] + m_Calibration.M_Ainv[1][2] * temp[2];
+        //Mxyz[2] = m_Calibration.M_Ainv[2][0] * temp[0] + m_Calibration.M_Ainv[2][1] * temp[1] + m_Calibration.M_Ainv[2][2] * temp[2];
+        //Mxyz[0] = m_Calibration.M_Ainv[0][0] * temp[0] + m_Calibration.M_Ainv[0][1] * temp[1] + m_Calibration.M_Ainv[0][2] * temp[2];
+        Mxyz[0] = 0.0;
+        Mxyz[1] = 0.0;
+        Mxyz[2] = 0.0;
+#else
+        for (i = 0; i < 3; i++)
+            Mxyz[i] = (Mxyz[i] - m_Calibration.M_B[i]);
+    #endif
+}
+
+
+
+
 
 void MPU6050Sensor::startCalibration(int calibrationType) {
     ledManager.on();
